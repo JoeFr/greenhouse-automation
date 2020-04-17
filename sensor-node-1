@@ -1,0 +1,187 @@
+// Include the libraries we need
+#include <ESP8266WiFi.h>
+#include <PubSubClient.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
+#include <DHT.h>
+
+
+// Dallas temp sensors on pin 4
+#define ONE_WIRE_BUS D4
+#define TEMPERATURE_PRECISION 9
+
+// Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
+OneWire oneWire(ONE_WIRE_BUS);
+
+// Pass our oneWire reference to Dallas Temperature, the addresses are added manually.
+DallasTemperature sensors(&oneWire);
+
+// arrays to hold device addresses
+float tempSensor1, tempSensor2, tempSensor3 ,tempSensor4, tempSensor5;
+
+uint8_t sensor1[8] = { 0x28, 0xE3, 0x88, 0x1E, 0x00, 0x00, 0x80, 0x3A }; // Dallas 1
+uint8_t sensor2[8] = { 0x28, 0xFF, 0x76, 0x3E, 0x65, 0x14, 0x01, 0xFD }; // Dallas 2
+uint8_t sensor3[8] = { 0x28, 0xFF, 0x15, 0x9C, 0x65, 0x14, 0x01, 0x0C }; // Dallas 3
+uint8_t sensor4[8] = { 0x28, 0xCB, 0x89, 0x1E, 0x00, 0x00, 0x80, 0xE0 }; // Dallas 4
+uint8_t sensor5[8] = { 0x28, 0xFF, 0xEB, 0x8D, 0x65, 0x14, 0x01, 0xBF }; // Dallas 5
+
+
+// Two DHT Sensors on pins 2 and 3 - AM2301
+#define DHT1PIN D2
+#define DHT2PIN D3
+
+#define DHTTYPE DHT21
+char tString[6];
+char hString[6];
+//long previousMillis = 0;
+//long interval = 60000;
+
+DHT dht1(DHT1PIN, DHTTYPE);
+DHT dht2(DHT2PIN, DHTTYPE);
+
+//Wifi connection to the network
+const char* ssid = "GL-AR150-787"; //TELUS1521
+const char* password = "y7g95mw99j"; //y7g95mw99j
+const char* mqtt_server = "192.168.1.111"; //IP of the Raspberry with the MQTT Broker
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+long lastMsg = 0;
+char msg[50];
+int value = 0;
+
+void setup_wifi() {
+  delay(10);
+  // Start by connecting to a WiFi network
+  Serial.println();
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println("IP address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Create a random client ID
+    String clientId = "ESP8266Client-";
+    clientId += String(random(0xffff), HEX);
+    // Attempt to connect
+    if (client.connect(clientId.c_str())) {
+      Serial.println("connected");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(10000);
+    }
+  }
+}
+
+void setup(void)
+{
+  // start serial port
+  Serial.begin(115200);
+  setup_wifi();
+  client.setServer(mqtt_server, 1883);
+  
+  sensors.begin();
+  dht1.begin();
+  dht2.begin();
+
+  // locate devices on the bus
+  Serial.print("Locating devices...");
+  Serial.print("Found ");
+  Serial.print(sensors.getDeviceCount(), DEC);
+  Serial.println(" devices.");
+
+  // report parasite power requirements
+  Serial.print("Parasite power is: ");
+  if (sensors.isParasitePowerMode()) Serial.println("ON");
+  else Serial.println("OFF");
+
+}
+
+/*
+   Main function, calls the temperatures in a loop.
+*/
+void loop(void)
+{
+
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+
+  long now = millis();
+  if (now - lastMsg > 2000) {
+    lastMsg = now;
+    
+    sensors.requestTemperatures(); // Gets the values of the temperature
+    tempSensor1 = sensors.getTempC(sensor1);
+    tempSensor2 = sensors.getTempC(sensor2);
+    tempSensor3 = sensors.getTempC(sensor3);
+    tempSensor4 = sensors.getTempC(sensor4);
+    tempSensor5 = sensors.getTempC(sensor5);
+
+    char dSensor1[8];
+    dtostrf(tempSensor1, 6, 2, dSensor1);
+    char dSensor2[8];
+    dtostrf(tempSensor2, 6, 2, dSensor2);
+    char dSensor3[8];
+    dtostrf(tempSensor3, 6, 2, dSensor3);
+    char dSensor4[8];
+    dtostrf(tempSensor4, 6, 2, dSensor4);
+    char dSensor5[8];
+    dtostrf(tempSensor5, 6, 2, dSensor5);
+    
+    // Send the dallas temps 
+    client.publish("/sensors/dallasTemp1", dSensor1);
+    client.publish("/sensors/dallasTemp2", dSensor2);
+    client.publish("/sensors/dallasTemp3", dSensor3);
+    client.publish("/sensors/dallasTemp4", dSensor4);
+    client.publish("/sensors/dallasTemp5", dSensor5);
+
+    // DHT1 sensor
+//    unsigned long currentMillis = millis();
+//    if(currentMillis - previousMillis > interval) {
+      float h1 = dht1.readHumidity();
+      dtostrf(h1, 2, 2, hString);
+      float t1 = dht1.readTemperature();
+      dtostrf(t1, 2, 2, tString);
+        if (isnan(h1) || isnan(t1)) {
+          Serial.println("Failed to read from DHT sensor!");
+          return;
+        }
+      // Send DHT1 data
+      client.publish("/sensors/dht1/temperature",tString);
+      client.publish("/sensors/dht1/humidity",hString);
+
+    // DHT2 sensor
+      float h2 = dht2.readHumidity();
+      dtostrf(h2, 2, 2, hString);
+      float t2 = dht2.readTemperature();
+      dtostrf(t2, 2, 2, tString);
+        if (isnan(h2) || isnan(t2)) {
+          Serial.println("Failed to read from DHT sensor!");
+          return;
+        }
+      // Send DHT2 data
+      client.publish("/sensors/dht2/temperature",tString);
+      client.publish("/sensors/dht2/humidity",hString);
+  }
+  // Wait 10 seconds before doing this trick again
+  delay(10000);
+  }
